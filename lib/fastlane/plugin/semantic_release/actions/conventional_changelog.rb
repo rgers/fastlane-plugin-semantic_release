@@ -169,7 +169,7 @@ module Fastlane
         when "markdown"
           "[#{short_hash}](#{url})"
         else
-          url
+          "[#{short_hash}]"
         end
       end
 

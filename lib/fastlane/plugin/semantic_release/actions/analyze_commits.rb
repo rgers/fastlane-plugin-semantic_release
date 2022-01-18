@@ -20,8 +20,20 @@ module Fastlane
     class AnalyzeCommitsAction < Action
       def self.get_last_tag(params)
         # Try to find the tag
-        command = "git describe --tags --match=#{params[:match]}"
-        Actions.sh(command, log: params[:debug])
+        command = "git tag -l #{params[:match]}"
+        output = Actions.sh(command, log: params[:debug])
+        lineoutput = output.split(/\r?\n|\r/)
+        lineoutput[lineoutput.length-1]
+      rescue
+        UI.message("Tag was not found for match pattern - #{params[:match]}")
+        ''
+      end
+      def self.get_first_tag(params)
+        # Try to find the tag
+        command = "git tag -l #{params[:match]}"
+        output = Actions.sh(command, log: params[:debug])
+        lineoutput = output.split(/\r?\n|\r/)
+        lineoutput[lineoutput.length-2]
       rescue
         UI.message("Tag was not found for match pattern - #{params[:match]}")
         ''
@@ -42,38 +54,36 @@ module Fastlane
       end
 
       def self.get_beginning_of_next_sprint(params)
-        # command to get first commit
-        git_command = 'git rev-list --max-parents=0 HEAD'
+
+        tag = get_first_tag(match: params[:match], debug: params[:debug])
+
+        tag_name = tag
+        parsed_version = tag_name.match(params[:tag_version_match])
+
+        if parsed_version.nil?
+          UI.user_error!("Error while parsing version from tag #{tag_name} by using tag_version_match - #{params[:tag_version_match]}. Please check if the tag contains version as you expect and if you are using single brackets for tag_version_match parameter.")
+        end
+
+        version = parsed_version[0]
+        # Get a hash of last version tag
+        hash = get_last_tag_hash(
+          tag_name: tag_name,
+          debug: params[:debug]
+        )
+
+        UI.message("Found a tag #{tag_name} associated with version #{version}")
+
+        return {
+          hash: hash,
+          version: version
+        }
+      end
+
+      def self.get_ending_of_next_sprint(params)
 
         tag = get_last_tag(match: params[:match], debug: params[:debug])
 
-        # if tag doesn't exist it get's first commit or fallback tag (v*.*.*)
-        if tag.empty?
-          UI.message("It couldn't match tag for #{params[:match]}. Check if first commit can be taken as a beginning of next release")
-          # If there is no tag found we taking the first commit of current branch
-          hash_lines = Actions.sh("#{git_command} | wc -l", log: params[:debug]).chomp
-
-          if hash_lines.to_i == 1
-            UI.message("First commit of the branch is taken as a begining of next release")
-            return {
-              # here we know this command will return 1 line
-              hash: Actions.sh(git_command, log: params[:debug]).chomp
-            }
-          end
-
-          # neighter matched tag and first hash could be used - as fallback we try vX.Y.Z
-          UI.message("It couldn't match tag for #{params[:match]} and couldn't use first commit. Check if tag vX.Y.Z can be taken as a begining of next release")
-          tag = get_last_tag(match: "v*", debug: params[:debug])
-
-          # even fallback tag doesn't work
-          if tag.empty?
-            return false
-          end
-        end
-
-        # Tag's format is v2.3.4-5-g7685948
-        # See git describe man page for more info
-        tag_name = tag.split('-')[0...-2].join('-').strip
+        tag_name = tag
         parsed_version = tag_name.match(params[:tag_version_match])
 
         if parsed_version.nil?
@@ -98,9 +108,17 @@ module Fastlane
       def self.is_releasable(params)
         # Hash of the commit where is the last version
         beginning = get_beginning_of_next_sprint(params)
+        ending = get_ending_of_next_sprint(params)
 
         unless beginning
           UI.error('It could not find a begining of this sprint. How to fix this:')
+          UI.error('-- ensure there is only one commit with --max-parents=0 (this command should return one line: "git rev-list --max-parents=0 HEAD")')
+          UI.error('-- tell us explicitely where the release starts by adding tag like this: vX.Y.Z (where X.Y.Z is version from which it starts computing next version number)')
+          return false
+        end
+
+        unless ending
+          UI.error('It could not find an ending of this sprint. How to fix this:')
           UI.error('-- ensure there is only one commit with --max-parents=0 (this command should return one line: "git rev-list --max-parents=0 HEAD")')
           UI.error('-- tell us explicitely where the release starts by adding tag like this: vX.Y.Z (where X.Y.Z is version from which it starts computing next version number)')
           return false
@@ -111,10 +129,14 @@ module Fastlane
         # If the tag is not found we are taking HEAD as reference
         hash = beginning[:hash] || 'HEAD'
 
+        current_version = ending[:version]
+        current_hash = ending[:hash] || 'HEAD'
+
         # converts last version string to the int numbers
-        next_major = (version.split('.')[0] || 0).to_i
-        next_minor = (version.split('.')[1] || 0).to_i
-        next_patch = (version.split('.')[2] || 0).to_i
+        next_major = (current_version.split('.')[0] || 0).to_i
+        next_minor = (current_version.split('.')[1] || 0).to_i
+        next_patch = (current_version.split('.')[2] || 0).to_i
+        next_test = (current_version.split('.')[3] || 0).to_i
 
         is_next_version_compatible_with_codepush = true
 
@@ -148,26 +170,26 @@ module Fastlane
             next if scopes_to_ignore.include?(scope) #=> true
           end
 
-          if commit[:release] == "major" || commit[:is_breaking_change]
-            next_major += 1
-            next_minor = 0
-            next_patch = 0
-          elsif commit[:release] == "minor"
-            next_minor += 1
-            next_patch = 0
-          elsif commit[:release] == "patch"
-            next_patch += 1
-          end
+          #if commit[:release] == "major" || commit[:is_breaking_change]
+          #  next_major += 1
+          #  next_minor = 0
+          #  next_patch = 0
+          #elsif commit[:release] == "minor"
+          #  next_minor += 1
+          #  next_patch = 0
+          #elsif commit[:release] == "patch"
+          #  next_patch += 1
+          #end
 
           unless commit[:is_codepush_friendly]
             is_next_version_compatible_with_codepush = false
           end
 
-          next_version = "#{next_major}.#{next_minor}.#{next_patch}"
+          next_version = "#{next_major}.#{next_minor}.#{next_patch}-qa.#{next_test}"
           UI.message("#{next_version}: #{subject}") if params[:show_version_path]
         end
 
-        next_version = "#{next_major}.#{next_minor}.#{next_patch}"
+        next_version = "#{next_major}.#{next_minor}.#{next_patch}-qa.#{next_test}"
 
         is_next_version_releasable = Helper::SemanticReleaseHelper.semver_gt(next_version, version)
 

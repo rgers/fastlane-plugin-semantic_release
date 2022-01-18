@@ -62,6 +62,7 @@ module Fastlane
 
         params[:order].each do |type|
           # write section only if there is at least one commit
+          next if sections[type.to_sym] == nil
           next if commits.none? { |commit| commit[:type] == type }
 
           result += style_text(sections[type.to_sym], format, "heading").to_s
@@ -248,14 +249,15 @@ module Fastlane
             key: :sections,
             description: "Map type to section title",
             default_value: {
-              feat: "Features",
-              fix: "Bug fixes",
+              feat: "Funkcjonalności",
+              fix: "Poprawki Błędów",
               refactor: "Code refactoring",
               perf: "Performance improvements",
-              chore: "Building system",
+              #chore: "Building system",
+              chore: nil,
               test: "Testing",
               docs: "Documentation",
-              no_type: "Other work"
+              no_type: nil
             },
             type: Hash,
             optional: true
